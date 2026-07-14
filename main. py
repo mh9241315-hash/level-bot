@@ -23,16 +23,15 @@ class LevelBot(commands.Bot):
 
 bot = LevelBot()
 
-# ملفات تخزين البيانات تلقائياً
+# ملف حفظ بيانات ليفلات الأعضاء
 DATA_FILE = "levels.json"
-CONFIG_FILE = "level_config.json"
 
-# آيدي القناة الأساسية لإرسال ليفل أب المحددة من قبلك
-DEFAULT_LEVEL_CHANNEL_ID = 1515157531842973888
+# روابط صور كروت الليفل والرانك المخصصة لك
+LEVEL_UP_BG_URL = "https://e.top4top.io/p_3847ysunn0.png"  # خلفية ليفل أب
+RANK_BG_URL = "https://e.top4top.io/p_3847ysunn0.png"      # خلفية رانك العضو
 
-# الروابط الجديدة والمباشرة للصور التي أرسلتها
-LEVEL_UP_BG_URL = "https://e.top4top.io/p_3847ysunn0.png"  # خلفية ليفل أب الجديدة المحددة من قبلك
-RANK_CARD_BG_URL = "https://i.top4top.io/p_3847cuao10.png"  # خلفية الرانك كارد الجديدة المحددة من قبلك
+# أسماء الرتب الثلاثة المطلوبة عند الوصول لليفل 5
+LEVEL_5_ROLES = ["ᴋᴛᴛ | ᴠᴄ", "ᴋᴛᴛ | ᴍᴇᴅɪᴀ", "ᴋᴛᴛ | ᴘʟᴜs"]
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -44,18 +43,12 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    return {"level_channel": DEFAULT_LEVEL_CHANNEL_ID, "ignored_channels": [], "level_roles": {}, "multipliers": {}}
+# دالة لحساب الـ XP المطلوب لكل ليفل
+def xp_for_level(level):
+    return 100 * (level ** 2) + 100
 
-def save_config(config):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=4)
-
-# --- 1. دالة صناعة كرت الـ Level Up تلقائياً ببيانات العضو ---
-async def create_levelup_card(avatar_url, old_level, new_level):
+# --- دالة رسم كرت الـ Level Up الفخم ---
+async def create_level_up_card(avatar_url, member_name, new_level):
     async with aiohttp.ClientSession() as session:
         async with session.get(LEVEL_UP_BG_URL) as resp:
             if resp.status != 200: return None
@@ -67,10 +60,9 @@ async def create_levelup_card(avatar_url, old_level, new_level):
     background = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
 
-    # تحديد حجم وموضع الأفاتار الدائري ليتطابق مع مكان الدائرة في الصورة الجديدة
+    # قص وتنسيق صورة العضو الشخصية
     avatar_size = (194, 194)
     avatar = avatar.resize(avatar_size, Image.Resampling.LANCZOS)
-    
     mask = Image.new("L", avatar_size, 0)
     draw_mask = ImageDraw.Draw(mask)
     draw_mask.ellipse((0, 0) + avatar_size, fill=255)
@@ -82,59 +74,78 @@ async def create_levelup_card(avatar_url, old_level, new_level):
     draw = ImageDraw.Draw(background)
     
     try:
-        font = ImageFont.truetype("arial.ttf", 60)
+        font_large = ImageFont.truetype("arial.ttf", 40)
+        font_small = ImageFont.truetype("arial.ttf", 30)
     except IOError:
-        font = ImageFont.load_default()
+        font_large = ImageFont.load_default()
+        font_small = ImageFont.load_default()
 
-    # كتابة نص الترقية بالأرقام الصحيحة
-    level_text = f"{old_level}  •  {new_level}"
-    draw.text((630, 160), level_text, fill="white", font=font, anchor="mm")
+    # كتابة نص ليفل أب المطور
+    draw.text((630, 120), f"LEVEL UP!", fill="white", font=font_large, anchor="mm")
+    draw.text((630, 180), f"LEVEL {new_level}", fill="#ff3333", font=font_small, anchor="mm")
 
     output = io.BytesIO()
     background.save(output, format="PNG")
     output.seek(0)
     return output
 
-# --- 2. دالة صناعة كرت الرانك (Rank Card) تلقائياً ببيانات العضو ---
-async def create_rank_card(avatar_url, username, user_tag, level, xp, xp_needed, rank_pos):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(RANK_CARD_BG_URL) as resp:
-            if resp.status != 200: return None
-            bg_bytes = await resp.read()
-        async with session.get(avatar_url) as resp:
-            if resp.status != 200: return None
-            avatar_bytes = await resp.read()
+@bot.event
+async def on_ready():
+    print(f"📊 بوت الليفل والتفاعل الأسطوري جاهز: {bot.user.name}")
 
-    background = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
-    avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+# --- نظام كسب الـ XP والهدايا العشوائية والميديا ---
+@bot.event
+async def on_message(message):
+    if message.author.bot or not message.guild:
+        return
 
-    # تعديل حجم الأفاتار ووضعه داخل الدائرة الحمراء لكرت الرانك الجديد
-    avatar_size = (205, 205)
-    avatar = avatar.resize(avatar_size, Image.Resampling.LANCZOS)
-    
-    mask = Image.new("L", avatar_size, 0)
-    draw_mask = ImageDraw.Draw(mask)
-    draw_mask.ellipse((0, 0) + avatar_size, fill=255)
-    
-    circular_avatar = ImageOps.fit(avatar, avatar_size, centering=(0.5, 0.5))
-    circular_avatar.putalpha(mask)
+    user_id = str(message.author.id)
+    data = load_data()
 
-    background.paste(circular_avatar, (58, 142), circular_avatar)
-    draw = ImageDraw.Draw(background)
-    
-    try:
-        font_name = ImageFont.truetype("arial.ttf", 45)
-        font_tag = ImageFont.truetype("arial.ttf", 25)
-        font_stats = ImageFont.truetype("arial.ttf", 30)
-    except IOError:
-        font_name = font_tag = font_stats = ImageFont.load_default()
+    if user_id not in data:
+        data[user_id] = {"xp": 0, "level": 0}
 
-    # كتابة اسم المستخدم والـ Tag
-    draw.text((290, 110), username.upper(), fill="white", font=font_name)
-    draw.text((290, 185), f"@{user_tag}", fill="#b5b5b5", font=font_tag)
+    current_xp = data[user_id]["xp"]
+    current_level = data[user_id]["level"]
 
-    # كتابة إحصائيات الليفل، الـ XP، والترتيب الفعلي بالسيرفر
-    draw.text((320, 315), str(level), fill="white", font=font_stats, anchor="mm")
-    
-    xp_text = f"{xp} / {xp_needed}"
-    draw.text((490, 315), xp_text, fill="white", font=font_
+    # 1️⃣ تحديد كمية الـ XP الأساسية بناءً على المحتوى (عادي أم ميديا)
+    # لو الرسالة فيها صور أو ملفات مرفقة (بوست أو ميديا) البوت يعطيه XP دبل!
+    if message.attachments or "http" in message.content:
+        xp_gained = random.randint(35, 60)  # ميديا بوست (هدية XP عالية)
+        is_media = True
+    else:
+        xp_gained = random.randint(15, 25)  # رسالة شات عادية
+        is_media = False
+
+    # 2️⃣ ميزة الهدية العشوائية للتفاعل (احتمال 8% يحصل على هدية XP ضخمة!)
+    had_bonus = False
+    bonus_xp = 0
+    if random.random() < 0.08:
+        bonus_xp = random.randint(50, 100)
+        xp_gained += bonus_xp
+        had_bonus = True
+
+    new_xp = current_xp + xp_gained
+    needed_xp = xp_for_level(current_level)
+
+    # 3️⃣ التحقق من الصعود لليفل جديد (Level Up)
+    if new_xp >= needed_xp:
+        new_xp -= needed_xp
+        current_level += 1
+        data[user_id]["level"] = current_level
+
+        # إرسال كارت التهنئة بالصورة والعبارة الروشة الخاصة بك
+        avatar_url = message.author.display_avatar.url
+        card_bytes = await create_level_up_card(avatar_url, message.author.name, current_level)
+        
+        level_msg = f"🎉 **كفوو يا بطل!** {message.author.mention} صعدت لليفل **{current_level}**! أكلت صباعين كيت كات وطرت فوق! 🍫👑"
+        
+        if card_bytes:
+            file = discord.File(fp=card_bytes, filename="levelup.png")
+            await message.channel.send(content=level_msg, file=file)
+        else:
+            await message.channel.send(content=level_msg)
+
+        # 4️⃣ إعطاء الـ 3 رتب تلقائياً عند الوصول لليفل 5
+        if current_level == 5:
+            given_roles = []
