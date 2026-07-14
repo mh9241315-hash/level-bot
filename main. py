@@ -1,23 +1,140 @@
-import discord
+hereimport discord
 from discord.ext import commands
+from discord import app_commands
 import os
+import json
+import random
+import aiohttp
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+import io
 
-# إعداد البوت والبريفكس (تقدر تغير الـ ! لأي علامة تانية أنت عايزها)
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+intents.guilds = True
+intents.members = True
 
-@bot.event
-async def on_ready():
-    print(f'تم تشغيل البوت بنجاح باسم: {bot.user}')
+class LevelBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
 
-@bot.command()
-async def ping(ctx):
-    await ctx.send(f'pong! 🏓 السرعة: {round(bot.latency * 1000)}ms')
+    async def setup_hook(self):
+        await self.tree.sync()
+        print("✅ تم مزامنة أوامر الـ Slash لبوت الليفل بنجاح!")
 
-# تشغيل البوت باستخدام المتغير البيئي (Token)
-token = os.environ.get("DISCORD_TOKEN")
-if token:
-    bot.run(token)
-else:
-    print("خطأ: لم يتم العثور على DISCORD_TOKEN في المتغيرات البيئية!")
+bot = LevelBot()
+
+# ملفات تخزين البيانات تلقائياً
+DATA_FILE = "levels.json"
+CONFIG_FILE = "level_config.json"
+
+# آيدي القناة الأساسية لإرسال ليفل أب المحددة من قبلك
+DEFAULT_LEVEL_CHANNEL_ID = 1515157531842973888
+
+# الروابط الجديدة والمباشرة للصور التي أرسلتها
+LEVEL_UP_BG_URL = "https://e.top4top.io/p_3847ysunn0.png"  # خلفية ليفل أب الجديدة المحددة من قبلك
+RANK_CARD_BG_URL = "https://i.top4top.io/p_3847cuao10.png"  # خلفية الرانك كارد الجديدة المحددة من قبلك
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    return {"level_channel": DEFAULT_LEVEL_CHANNEL_ID, "ignored_channels": [], "level_roles": {}, "multipliers": {}}
+
+def save_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
+
+# --- 1. دالة صناعة كرت الـ Level Up تلقائياً ببيانات العضو ---
+async def create_levelup_card(avatar_url, old_level, new_level):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(LEVEL_UP_BG_URL) as resp:
+            if resp.status != 200: return None
+            bg_bytes = await resp.read()
+        async with session.get(avatar_url) as resp:
+            if resp.status != 200: return None
+            avatar_bytes = await resp.read()
+
+    background = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
+    avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+
+    # تحديد حجم وموضع الأفاتار الدائري ليتطابق مع مكان الدائرة في الصورة الجديدة
+    avatar_size = (194, 194)
+    avatar = avatar.resize(avatar_size, Image.Resampling.LANCZOS)
+    
+    mask = Image.new("L", avatar_size, 0)
+    draw_mask = ImageDraw.Draw(mask)
+    draw_mask.ellipse((0, 0) + avatar_size, fill=255)
+    
+    circular_avatar = ImageOps.fit(avatar, avatar_size, centering=(0.5, 0.5))
+    circular_avatar.putalpha(mask)
+
+    background.paste(circular_avatar, (52, 53), circular_avatar)
+    draw = ImageDraw.Draw(background)
+    
+    try:
+        font = ImageFont.truetype("arial.ttf", 60)
+    except IOError:
+        font = ImageFont.load_default()
+
+    # كتابة نص الترقية بالأرقام الصحيحة
+    level_text = f"{old_level}  •  {new_level}"
+    draw.text((630, 160), level_text, fill="white", font=font, anchor="mm")
+
+    output = io.BytesIO()
+    background.save(output, format="PNG")
+    output.seek(0)
+    return output
+
+# --- 2. دالة صناعة كرت الرانك (Rank Card) تلقائياً ببيانات العضو ---
+async def create_rank_card(avatar_url, username, user_tag, level, xp, xp_needed, rank_pos):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(RANK_CARD_BG_URL) as resp:
+            if resp.status != 200: return None
+            bg_bytes = await resp.read()
+        async with session.get(avatar_url) as resp:
+            if resp.status != 200: return None
+            avatar_bytes = await resp.read()
+
+    background = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
+    avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+
+    # تعديل حجم الأفاتار ووضعه داخل الدائرة الحمراء لكرت الرانك الجديد
+    avatar_size = (205, 205)
+    avatar = avatar.resize(avatar_size, Image.Resampling.LANCZOS)
+    
+    mask = Image.new("L", avatar_size, 0)
+    draw_mask = ImageDraw.Draw(mask)
+    draw_mask.ellipse((0, 0) + avatar_size, fill=255)
+    
+    circular_avatar = ImageOps.fit(avatar, avatar_size, centering=(0.5, 0.5))
+    circular_avatar.putalpha(mask)
+
+    background.paste(circular_avatar, (58, 142), circular_avatar)
+    draw = ImageDraw.Draw(background)
+    
+    try:
+        font_name = ImageFont.truetype("arial.ttf", 45)
+        font_tag = ImageFont.truetype("arial.ttf", 25)
+        font_stats = ImageFont.truetype("arial.ttf", 30)
+    except IOError:
+        font_name = font_tag = font_stats = ImageFont.load_default()
+
+    # كتابة اسم المستخدم والـ Tag
+    draw.text((290, 110), username.upper(), fill="white", font=font_name)
+    draw.text((290, 185), f"@{user_tag}", fill="#b5b5b5", font=font_tag)
+
+    # كتابة إحصائيات الليفل، الـ XP، والترتيب الفعلي بالسيرفر
+    draw.text((320, 315), str(level), fill="white", font=font_stats, anchor="mm")
+    
+    xp_text = f"{xp} / {xp_needed}"
+    draw.text((490, 315), xp_text, fill="white", font=font_
